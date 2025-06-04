@@ -1,0 +1,100 @@
+#include <bits/stdc++.h>
+using namespace std;
+
+mutex mtx; // Mutex to synchronize shared resources (e.g., file writes across threads)
+
+// Function to compress a chunk of data using Run-Length Encoding (RLE)
+void compressChunk(const vector<char>& chunk, vector<char>& compressed) {
+    for (size_t i = 0; i < chunk.size();) {
+        char currentChar = chunk[i];
+        size_t count = 1;
+        // Count consecutive occurrences of the current character
+        while (i + count < chunk.size() && chunk[i + count] == currentChar && count < 255) {
+            ++count;
+        }
+        compressed.push_back(currentChar); // Store the character
+        compressed.push_back(count);      // Store the count
+        i += count;
+    }
+}
+
+// Function to decompress a chunk of data encoded with RLE
+void decompressChunk(const vector<char>& compressed, vector<char>& chunk) {
+    for (size_t i = 0; i < compressed.size(); i += 2) {
+        char currentChar = compressed[i];
+        size_t count = (unsigned char)compressed[i + 1]; // Number of repetitions
+        chunk.insert(chunk.end(), count, currentChar);   // Append repeated characters
+    }
+}
+
+// Function to process chunks of a file (either compressing or decompressing)
+void processFileChunk(ifstream& inFile, ofstream& outFile, bool compress, size_t chunkSize) {
+    while (true) {
+        vector<char> chunk(chunkSize);
+        {
+            lock_guard<mutex> lock(mtx); // Lock the input file for thread-safe reading
+            inFile.read(chunk.data(), chunkSize);
+            chunk.resize(inFile.gcount()); // Resize to actual read size
+        }
+
+        if (chunk.empty()) break; // Stop if no more data to read
+
+        vector<char> processed;
+        if (compress) compressChunk(chunk, processed);   // Compress the chunk
+        else decompressChunk(chunk, processed);          // Decompress the chunk
+
+        {
+            lock_guard<mutex> lock(mtx); // Lock the output file for thread-safe writing
+            outFile.write(processed.data(), processed.size());
+        }
+    }
+}
+
+// Main function to handle multithreaded file processing
+void processFile(const string& inputFile, const string& outputFile, bool compress) {
+    ifstream inFile(inputFile, ios::binary); // Open input file in binary mode
+    ofstream outFile(outputFile, ios::binary); // Open output file in binary mode
+
+    if (!inFile || !outFile) {
+        cerr << "Error opening files!" << endl;
+        return;
+    }
+
+    const size_t chunkSize = 1024 * 1024; // Process 1MB chunks
+    const int threadCount = thread::hardware_concurrency(); // Get available threads
+    vector<thread> threads;
+
+    // Launch threads to process file chunks in parallel
+    for (int i = 0; i < threadCount; ++i) {
+        threads.emplace_back(processFileChunk, ref(inFile), ref(outFile), compress, chunkSize);
+    }
+
+    // Wait for all threads to finish
+    for (auto& t : threads) t.join();
+}
+
+int main() {
+    string inputFile = "input.txt";          // Input file to be compressed
+    string compressedFile = "compressed.bin"; // Output compressed file
+    string decompressedFile = "decompressed.txt"; // Output decompressed file
+
+    // Compress the file
+    cout << "Compressing file...\n";
+    auto start = chrono::high_resolution_clock::now(); // Start timer
+    processFile(inputFile, compressedFile, true); // Compress inputFile to compressedFile
+    auto end = chrono::high_resolution_clock::now(); // End timer
+    cout << "Compression completed in "
+         << chrono::duration_cast<chrono::milliseconds>(end - start).count()
+         << " ms.\n";
+
+    // Decompress the file
+    cout << "Decompressing file...\n";
+    start = chrono::high_resolution_clock::now(); // Start timer
+    processFile(compressedFile, decompressedFile, false); // Decompress compressedFile to decompressedFile
+    end = chrono::high_resolution_clock::now(); // End timer
+    cout << "Decompression completed in "
+         << chrono::duration_cast<chrono::milliseconds>(end - start).count()
+         << " ms.\n";
+
+    return 0;
+}
